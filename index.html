@@ -1,1 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mercury</title>
 
+<style>
+:root {
+  --glass: rgba(255,255,255,.12);
+  --border: rgba(255,255,255,.18);
+  --text: #e6e9ef;
+  --muted: #9aa0b0;
+}
+
+* { box-sizing:border-box; }
+
+body {
+  margin:0;
+  background: radial-gradient(circle at top, #2b2f36, #0e0f13);
+  font-family:-apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color:var(--text);
+  overflow:hidden;
+}
+
+#window {
+  display:flex;
+  flex-direction:column;
+  height:100vh;
+}
+
+/* ===== Title Bar ===== */
+#titlebar {
+  height:44px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:0 12px;
+  background:linear-gradient(to bottom, rgba(255,255,255,.18), rgba(255,255,255,.06));
+  backdrop-filter: blur(14px);
+  border-bottom:1px solid var(--border);
+}
+
+.dot { width:12px; height:12px; border-radius:50%; }
+.red{background:#ff5f57}
+.yellow{background:#febc2e}
+.green{background:#28c840}
+
+/* ===== Tabs ===== */
+#tabs {
+  display:flex;
+  gap:6px;
+  margin-left:10px;
+  overflow-x:auto;
+}
+
+.tab {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border-radius:6px;
+  background:var(--glass);
+  border:1px solid var(--border);
+  font-size:12px;
+  cursor:pointer;
+  opacity:.6;
+  max-width:180px;
+}
+.tab.active { opacity:1; background:rgba(255,255,255,.22); }
+
+.tab span {
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.tab button {
+  background:none;
+  border:none;
+  color:var(--muted);
+  cursor:pointer;
+  font-size:12px;
+}
+
+/* ===== Address ===== */
+#addr {
+  flex:1;
+  padding:6px 12px;
+  border-radius:8px;
+  background:rgba(0,0,0,.35);
+  border:1px solid var(--border);
+  color:white;
+  outline:none;
+}
+
+/* ===== Toolbar ===== */
+#toolbar {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 10px;
+  background:rgba(0,0,0,.25);
+  border-bottom:1px solid var(--border);
+}
+
+.tool {
+  padding:4px 8px;
+  border-radius:6px;
+  background:var(--glass);
+  border:1px solid var(--border);
+  font-size:11px;
+  cursor:pointer;
+}
+
+.tool.active {
+  background:rgba(255,255,255,.3);
+}
+
+/* ===== Bookmarks ===== */
+#bookmarks {
+  display:flex;
+  gap:6px;
+  overflow-x:auto;
+}
+
+/* ===== Settings Panel ===== */
+#settings {
+  position:absolute;
+  top:56px;
+  right:12px;
+  width:280px;
+  padding:12px;
+  background:rgba(20,22,30,.96);
+  backdrop-filter:blur(16px);
+  border:1px solid var(--border);
+  border-radius:10px;
+  display:none;
+  z-index:10;
+}
+
+.setting {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:10px;
+  font-size:12px;
+}
+
+/* ===== Content ===== */
+iframe {
+  flex:1;
+  border:none;
+  background:black;
+}
+</style>
+</head>
+
+<body>
+<div id="window">
+
+  <div id="titlebar">
+    <div class="dot red"></div>
+    <div class="dot yellow"></div>
+    <div class="dot green"></div>
+
+    <div id="tabs"></div>
+    <input id="addr" placeholder="Enter URL">
+  </div>
+
+  <div id="toolbar">
+    <div id="bookmarks"></div>
+    <div id="favBtn" class="tool">☆</div>
+    <div id="relayBtn" class="tool">Relay</div>
+    <div class="tool" onclick="toggleSettings()">⚙︎</div>
+  </div>
+
+  <iframe id="view"></iframe>
+</div>
+
+<div id="settings">
+  <div class="setting">
+    <span>Confirm before exit</span>
+    <input type="checkbox" id="confirmExit" checked>
+  </div>
+  <div class="setting">
+    <span>Reset session</span>
+    <button onclick="resetAll()">Reset</button>
+  </div>
+</div>
+
+<script>
+/* ===== Relay ===== */
+const RELAY = url =>
+  "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+
+/* ===== State ===== */
+let tabs = JSON.parse(localStorage.getItem("mercury.tabs") || "[]");
+let bookmarks = JSON.parse(localStorage.getItem("mercury.bookmarks") || "[]");
+let current = 0;
+let confirmExit = true;
+
+/* ===== Elements ===== */
+const tabsEl = document.getElementById("tabs");
+const addr = document.getElementById("addr");
+const view = document.getElementById("view");
+const bookmarksEl = document.getElementById("bookmarks");
+const favBtn = document.getElementById("favBtn");
+const relayBtn = document.getElementById("relayBtn");
+
+/* ===== Leave Guard ===== */
+window.addEventListener("beforeunload", e => {
+  if (!confirmExit) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+
+/* ===== Tabs ===== */
+function createTab(url="https://example.com") {
+  tabs.push({
+    url,
+    title:"Loading…",
+    relay:true
+  });
+  current = tabs.length - 1;
+  save();
+  render();
+  load(url);
+}
+
+function closeTab(i) {
+  tabs.splice(i,1);
+  if (current >= tabs.length) current = tabs.length - 1;
+  save();
+  render();
+  if (tabs[current]) load(tabs[current].url);
+}
+
+function load(url) {
+  const tab = tabs[current];
+  tab.url = url;
+  tab.title = "Loading…";
+  addr.value = url;
+  view.src = tab.relay ? RELAY(url) : url;
+  updateControls();
+  save();
+  render();
+}
+
+/* ===== Title ===== */
+view.addEventListener("load", () => {
+  let title;
+  try {
+    title = view.contentDocument.title;
+  } catch {}
+  if (!title) title = new URL(tabs[current].url).hostname;
+  tabs[current].title = title;
+  save();
+  render();
+});
+
+/* ===== Bookmarks ===== */
+function toggleBookmark() {
+  const url = tabs[current].url;
+  const i = bookmarks.indexOf(url);
+  if (i === -1) bookmarks.push(url);
+  else bookmarks.splice(i,1);
+  save();
+  renderBookmarks();
+  updateControls();
+}
+
+function renderBookmarks() {
+  bookmarksEl.innerHTML = "";
+  bookmarks.forEach(url => {
+    const b = document.createElement("div");
+    b.className = "tool";
+    b.textContent = new URL(url).hostname;
+    b.onclick = () => load(url);
+    bookmarksEl.appendChild(b);
+  });
+}
+
+/* ===== Controls ===== */
+function updateControls() {
+  favBtn.textContent = bookmarks.includes(tabs[current].url) ? "★" : "☆";
+  relayBtn.classList.toggle("active", tabs[current].relay);
+}
+
+/* ===== Render ===== */
+function render() {
+  tabsEl.innerHTML = "";
+
+  tabs.forEach((t,i) => {
+    const tab = document.createElement("div");
+    tab.className = "tab" + (i===current?" active":"");
+    tab.onclick = () => { current=i; load(t.url); };
+
+    const label = document.createElement("span");
+    label.textContent = t.title;
+
+    const close = document.createElement("button");
+    close.textContent = "×";
+    close.onclick = e => { e.stopPropagation(); closeTab(i); };
+
+    tab.append(label, close);
+    tabsEl.appendChild(tab);
+  });
+
+  const plus = document.createElement("div");
+  plus.className = "tab";
+  plus.textContent = "+";
+  plus.onclick = () => createTab();
+  tabsEl.appendChild(plus);
+}
+
+/* ===== Settings ===== */
+function toggleSettings() {
+  const s = document.getElementById("settings");
+  s.style.display = s.style.display === "block" ? "none" : "block";
+}
+
+document.getElementById("confirmExit").onchange = e =>
+  confirmExit = e.target.checked;
+
+function resetAll() {
+  localStorage.clear();
+  location.reload();
+}
+
+/* ===== Buttons ===== */
+favBtn.onclick = toggleBookmark;
+
+relayBtn.onclick = () => {
+  tabs[current].relay = !tabs[current].relay;
+  load(tabs[current].url);
+};
+
+/* ===== Input ===== */
+addr.onkeydown = e => {
+  if (e.key === "Enter") {
+    let u = addr.value.trim();
+    if (!u.startsWith("http")) u = "https://" + u;
+    load(u);
+  }
+};
+
+/* ===== Persistence ===== */
+function save() {
+  localStorage.setItem("mercury.tabs", JSON.stringify(tabs));
+  localStorage.setItem("mercury.bookmarks", JSON.stringify(bookmarks));
+}
+
+/* ===== Init ===== */
+if (!tabs.length) createTab();
+else {
+  render();
+  renderBookmarks();
+  load(tabs[current].url);
+}
+</script>
+</body>
+</html>
